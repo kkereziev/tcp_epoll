@@ -14,6 +14,7 @@ const TcpConnectionAcceptor = struct {
 
         tcp_echoer.* = .{
             .connection = connection,
+            .epoll_fd = self.epoll_fd,
         };
 
         const conn_data = try self.alloc.create(EpollData);
@@ -35,15 +36,23 @@ const TcpConnectionAcceptor = struct {
 
 const TcpEchoer = struct {
     connection: std.net.Server.Connection,
+    epoll_fd: i32,
 
     fn echo(user_data: ?*anyopaque) !void {
         const self: *TcpEchoer = @ptrCast(@alignCast(user_data));
 
-        while (true) {
-            var buf: [1024]u8 = undefined;
-            const read_bytes = try self.connection.stream.read(&buf);
-            try self.connection.stream.writeAll(buf[0..read_bytes]);
+        std.debug.print("Waiting\n", .{});
+
+        var buf: [1024]u8 = undefined;
+        const read_bytes = try self.connection.stream.read(&buf);
+
+        if (read_bytes == 0) {
+            try std.posix.epoll_ctl(self.epoll_fd, std.os.linux.EPOLL.CTL_DEL, self.connection.stream.handle, null);
+
+            return;
         }
+
+        try self.connection.stream.writeAll(buf[0..read_bytes]);
     }
 };
 
