@@ -13,6 +13,10 @@ pub fn init() !EventLoop {
     };
 }
 
+pub fn deinit(self: EventLoop) void {
+    std.posix.close(self.epoll_fd);
+}
+
 pub fn register(self: *EventLoop, fd: i32, handler: *const epoll.EventHandler) !Handle {
     var listen_event = std.os.linux.epoll_event{
         .events = std.os.linux.EPOLL.IN,

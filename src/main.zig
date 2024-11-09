@@ -78,6 +78,7 @@ pub fn main() !void {
     defer tcp_server.deinit();
 
     var event_loop = try EventLoop.init();
+    defer event_loop.deinit();
 
     var acceptor = TcpConnectionAcceptor{
         .alloc = alloc,
