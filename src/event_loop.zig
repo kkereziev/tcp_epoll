@@ -5,7 +5,15 @@ const EventLoop = @This();
 
 epoll_fd: i32,
 
-pub fn register(self: *EventLoop, fd: i32, handler: *epoll.EventHandler) !Handle {
+pub fn init() !EventLoop {
+    const fd = try std.posix.epoll_create1(0);
+
+    return .{
+        .epoll_fd = fd,
+    };
+}
+
+pub fn register(self: *EventLoop, fd: i32, handler: *const epoll.EventHandler) !Handle {
     var listen_event = std.os.linux.epoll_event{
         .events = std.os.linux.EPOLL.IN,
         .data = .{ .ptr = @intFromPtr(handler) },
@@ -13,8 +21,8 @@ pub fn register(self: *EventLoop, fd: i32, handler: *epoll.EventHandler) !Handle
 
     try std.posix.epoll_ctl(self.epoll_fd, std.os.linux.EPOLL.CTL_ADD, fd, &listen_event);
 
-    return .Handle{
-        .epoll_df = self.epoll_fd,
+    return Handle{
+        .epoll_fd = self.epoll_fd,
         .fd = fd,
     };
 }
@@ -40,7 +48,7 @@ pub const Handle = struct {
     epoll_fd: i32,
 
     pub fn deinit(self: *const Handle) void {
-        try std.posix.epoll_ctl(self.epoll_fd, std.os.linux.EPOLL.CTL_DEL, self.fd, null) catch |e| {
+        std.posix.epoll_ctl(self.epoll_fd, std.os.linux.EPOLL.CTL_DEL, self.fd, null) catch |e| {
             std.debug.panic("Failed to unregister with epoll: {any}\n", .{e});
         };
     }
