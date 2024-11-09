@@ -1,7 +1,10 @@
 const std = @import("std");
+const epoll = @import("./epoll.zig");
+const EventLoop = @import("./event_loop.zig");
 
 const TcpConnectionAcceptor = struct {
     alloc: std.mem.Allocator,
+    event_loop: *EventLoop,
     epoll_fd: i32,
     server: *std.net.Server,
 
@@ -17,7 +20,7 @@ const TcpConnectionAcceptor = struct {
             .epoll_fd = self.epoll_fd,
         };
 
-        const conn_data = try self.alloc.create(EpollData);
+        const conn_data = try self.alloc.create(epoll.EventHandler);
         errdefer self.alloc.destroy(conn_data);
 
         conn_data.* = .{
@@ -25,18 +28,13 @@ const TcpConnectionAcceptor = struct {
             .callback = TcpEchoer.echo,
         };
 
-        var event = std.os.linux.epoll_event{
-            .events = std.os.linux.EPOLL.IN,
-            .data = .{ .ptr = @intFromPtr(conn_data) },
-        };
-
-        try std.posix.epoll_ctl(self.epoll_fd, std.os.linux.EPOLL.CTL_ADD, connection.stream.handle, &event);
+        try self.event_loop.register(connection.stream.handle, conn_data);
     }
 };
 
 const TcpEchoer = struct {
     connection: std.net.Server.Connection,
-    epoll_fd: i32,
+    handle: EventLoop.Handle,
 
     fn echo(user_data: ?*anyopaque) !void {
         const self: *TcpEchoer = @ptrCast(@alignCast(user_data));
@@ -64,16 +62,12 @@ fn echo(conn: std.net.Server.Connection) !void {
     }
 }
 
-const EpollCallback = *const fn (?*anyopaque) anyerror!void;
-
-const EpollData = struct {
-    data: ?*anyopaque,
-    callback: EpollCallback,
-};
-
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    defer {
+        const ok = gpa.deinit();
+        std.debug.assert(ok == std.heap.Check.ok);
+    }
 
     const alloc = gpa.allocator();
 
@@ -84,13 +78,17 @@ pub fn main() !void {
 
     const epoll_fd = try std.posix.epoll_create1(0);
 
+    const event_loop = EventLoop{
+        .epoll_fd = epoll_fd,
+    };
     var acceptor = TcpConnectionAcceptor{
         .alloc = alloc,
         .epoll_fd = epoll_fd,
+        .event_loop = &event_loop,
         .server = &tcp_server,
     };
 
-    const listener_data = &EpollData{
+    const listener_data = &epoll.EventHandler{
         .data = &acceptor,
         .callback = TcpConnectionAcceptor.accept_tcp_connection,
     };
@@ -108,7 +106,7 @@ pub fn main() !void {
         const num_fd = std.posix.epoll_wait(epoll_fd, &events, -1);
 
         for (events[0..num_fd]) |event| {
-            const data: *const EpollData = @ptrFromInt(event.data.ptr);
+            const data: *const epoll.EventHandler = @ptrFromInt(event.data.ptr);
 
             data.callback(data.data) catch |e| {
                 std.log.err("Found error during event handling: {any}\n", .{e});
