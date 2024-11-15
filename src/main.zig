@@ -7,35 +7,69 @@ const TcpConnectionAcceptor = struct {
     event_loop: *EventLoop,
     server: *std.net.Server,
 
+    pub fn deinit(self: *TcpConnectionAcceptor) void {
+        for (self.echoer.items) |echoer| {
+            echoer.deinit();
+
+            self.alloc.destroy(echoer);
+        }
+    }
+
     fn accept_tcp_connection(user_data: ?*anyopaque) anyerror!void {
         const self: *TcpConnectionAcceptor = @ptrCast(@alignCast(user_data));
         const connection = try self.server.accept();
 
-        const tcp_echoer = try self.alloc.create(TcpEchoer);
-        errdefer self.alloc.destroy(tcp_echoer);
+        const tcp_echoer = TcpEchoer.init(self.alloc, connection) catch |e| {
+            connection.stream.close();
 
-        tcp_echoer.* = .{
-            .connection = connection,
-            .handle = undefined,
+            return e;
         };
+        errdefer tcp_echoer.deinit();
 
-        const conn_data = try self.alloc.create(epoll.EventHandler);
-        errdefer self.alloc.destroy(conn_data);
-
-        conn_data.* = .{
-            .data = tcp_echoer,
-            .callback = TcpEchoer.echo,
-        };
-
-        const event_loop_handle = try self.event_loop.register(connection.stream.handle, conn_data);
-
-        tcp_echoer.handle = event_loop_handle;
+        try tcp_echoer.register(self.event_loop);
     }
 };
 
 const TcpEchoer = struct {
+    alloc: std.mem.Allocator,
     connection: std.net.Server.Connection,
-    handle: EventLoop.Handle,
+    handle: ?EventLoop.Handle,
+
+    fn init(alloc: std.mem.Allocator, connection: std.net.Server.Connection) !*TcpEchoer {
+        const tcp_echoer = try alloc.create(TcpEchoer);
+
+        tcp_echoer.* = .{
+            .alloc = alloc,
+            .connection = connection,
+            .handle = null,
+        };
+
+        return tcp_echoer;
+    }
+
+    fn register(self: *TcpEchoer, event_loop: *EventLoop) !void {
+        const conn_data = try self.alloc.create(epoll.EventHandler);
+        errdefer self.alloc.destroy(conn_data);
+
+        conn_data.* = .{
+            .data = self,
+            .callback = TcpEchoer.echo,
+        };
+
+        const event_loop_handle = try event_loop.register(self.connection.stream.handle, conn_data);
+
+        self.handle = event_loop_handle;
+    }
+
+    fn deinit(self: *TcpEchoer) void {
+        if (self.handle) |handle| {
+            handle.deinit();
+        }
+
+        self.connection.stream.close();
+
+        self.alloc.destroy(self);
+    }
 
     fn echo(user_data: ?*anyopaque) !void {
         const self: *TcpEchoer = @ptrCast(@alignCast(user_data));
@@ -46,7 +80,7 @@ const TcpEchoer = struct {
         const read_bytes = try self.connection.stream.read(&buf);
 
         if (read_bytes == 0) {
-            self.handle.deinit();
+            self.deinit();
 
             return;
         }
