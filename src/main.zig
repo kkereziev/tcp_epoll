@@ -15,7 +15,7 @@ const TcpConnectionAcceptor = struct {
         }
     }
 
-    fn accept_tcp_connection(user_data: ?*anyopaque) anyerror!void {
+    fn acceptTcpConnection(user_data: ?*anyopaque) anyerror!void {
         const self: *TcpConnectionAcceptor = @ptrCast(@alignCast(user_data));
         const connection = try self.server.accept();
 
